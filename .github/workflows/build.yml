@@ -1,0 +1,69 @@
+name: Build Kernel with KernelSU Next + SUSFS + AnyKernel3
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: garnet-random/android_kernel_xiaomi_sm7435
+          ref: lineage-23.0
+          path: kernel
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libelf-dev libssl-dev make clang lld git curl zip python3
+
+      - name: Setup AOSP Clang (Android 12 - 5.10 compatible)
+        run: |
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang -b android12-release
+          echo "CLANG_PATH=$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_ENV
+          echo "$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_PATH
+
+      - name: Clone KernelSU-Next
+        run: git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git ksu
+
+      - name: Apply KernelSU Next
+        run: |
+          cd kernel
+          ../ksu/kernel/setup.sh .
+
+      - name: Clone SUSFS4KSU
+        run: git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs
+
+      - name: Apply SUSFS Patch (5.10)
+        run: |
+          cd kernel
+          git apply ../susfs/patch/5.10/susfs-v2.0.0-5.10.patch || echo "Patch applied with possible minor adjustment"
+
+      - name: Defconfig (GKI)
+        run: |
+          cd kernel
+          make O=out ARCH=arm64 gki_defconfig
+
+      - name: Build Kernel
+        run: |
+          cd kernel
+          make O=out ARCH=arm64 CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip -j$(nproc --all)
+
+      - name: Clone AnyKernel3 (Garnet compatible)
+        run: git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+
+      - name: Package AnyKernel3.zip
+        run: |
+          cd AnyKernel3
+          cp ../kernel/out/arch/arm64/boot/Image.gz-dtb Image.gz-dtb 2>/dev/null || cp ../kernel/out/arch/arm64/boot/Image.gz Image.gz-dtb || cp ../kernel/out/arch/arm64/boot/Image Image.gz-dtb
+          sed -i 's/kernel.string=.*/kernel.string=Garnet-KernelSU-Next-SUSFS-by-neko/' anykernel.sh
+          zip -r9 ../AnyKernel3-Garnet-KSU-SUSFS.zip *
+
+      - name: Upload AnyKernel3
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnyKernel3-Garnet-KernelSU-Next-SUSFS
+          path: AnyKernel3-Garnet-KSU-SUSFS.zip
